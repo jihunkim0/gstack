@@ -23,20 +23,22 @@ while [ $# -gt 0 ]; do
 done
 
 case "$HOST" in
-  claude|codex|gemini|auto) ;;
-  *) echo "Unknown --host value: $HOST (expected claude, codex, gemini, or auto)" >&2; exit 1 ;;
+  claude|codex|gemini|opencode|auto) ;;
+  *) echo "Unknown --host value: $HOST (expected claude, codex, gemini, opencode, or auto)" >&2; exit 1 ;;
 esac
 
 # For auto: detect which agents are installed
 INSTALL_CLAUDE=0
 INSTALL_CODEX=0
 INSTALL_GEMINI=0
+INSTALL_OPENCODE=0
 if [ "$HOST" = "auto" ]; then
   command -v claude >/dev/null 2>&1 && INSTALL_CLAUDE=1
   command -v codex >/dev/null 2>&1 && INSTALL_CODEX=1
   command -v gemini >/dev/null 2>&1 && INSTALL_GEMINI=1
+  command -v opencode >/dev/null 2>&1 && INSTALL_OPENCODE=1
   # If none found, default to claude
-  if [ "$INSTALL_CLAUDE" -eq 0 ] && [ "$INSTALL_CODEX" -eq 0 ] && [ "$INSTALL_GEMINI" -eq 0 ]; then
+  if [ "$INSTALL_CLAUDE" -eq 0 ] && [ "$INSTALL_CODEX" -eq 0 ] && [ "$INSTALL_GEMINI" -eq 0 ] && [ "$INSTALL_OPENCODE" -eq 0 ]; then
     INSTALL_CLAUDE=1
   fi
 elif [ "$HOST" = "claude" ]; then
@@ -45,6 +47,8 @@ elif [ "$HOST" = "codex" ]; then
   INSTALL_CODEX=1
 elif [ "$HOST" = "gemini" ]; then
   INSTALL_GEMINI=1
+elif [ "$HOST" = "opencode" ]; then
+  INSTALL_OPENCODE=1
 fi
 
 ensure_playwright_browser() {
@@ -218,7 +222,37 @@ if [ "$INSTALL_CODEX" -eq 1 ]; then
   create_agents_sidecar "$REPO_ROOT"
 fi
 
-# 7. Install for Gemini CLI
+# 7. Install for OpenCode (symlinks into ~/.agents/skills/)
+if [ "$INSTALL_OPENCODE" -eq 1 ]; then
+  AGENTS_SKILLS="$HOME/.agents/skills"
+  AGENTS_GSTACK="$AGENTS_SKILLS/gstack"
+  mkdir -p "$AGENTS_SKILLS"
+
+  # Symlink gstack source for runtime assets (bin/, browse/dist/)
+  if [ -L "$AGENTS_GSTACK" ] || [ ! -e "$AGENTS_GSTACK" ]; then
+    ln -snf "$GSTACK_DIR" "$AGENTS_GSTACK"
+  fi
+
+  # Symlink each skill directory
+  opencode_linked=()
+  for skill_dir in "$GSTACK_DIR"/*/; do
+    if [ -f "$skill_dir/SKILL.md" ]; then
+      skill_name="$(basename "$skill_dir")"
+      [ "$skill_name" = "node_modules" ] && continue
+      target="$AGENTS_SKILLS/$skill_name"
+      if [ -L "$target" ] || [ ! -e "$target" ]; then
+        ln -snf "$GSTACK_DIR/$skill_name" "$target"
+        opencode_linked+=("$skill_name")
+      fi
+    fi
+  done
+
+  echo "gstack ready (opencode)."
+  echo "  browse: $BROWSE_BIN"
+  echo "  opencode skills (${#opencode_linked[@]}): $AGENTS_SKILLS"
+fi
+
+# 8. Install for Gemini CLI
 if [ "$INSTALL_GEMINI" -eq 1 ] || command -v gemini >/dev/null 2>&1; then
   gemini_existing=$(gemini skills list 2>/dev/null || true)
   gemini_linked=()

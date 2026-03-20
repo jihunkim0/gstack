@@ -67,7 +67,7 @@ git clone https://github.com/garrytan/gstack.git ~/gstack
 cd ~/gstack && ./setup --host auto
 ```
 
-This detects `claude`, `codex`, `gemini`, and `opencode` binaries and sets up each one. Or install for a specific agent:
+This detects `claude`, `codex`, `gemini`, and `opencode` and sets up each one. Or install for a specific agent:
 
 ```bash
 # Codex — skills go to ~/.codex/skills/
@@ -77,7 +77,11 @@ This detects `claude`, `codex`, `gemini`, and `opencode` binaries and sets up ea
 ./setup --host gemini
 ```
 
-**OpenCode** works with zero setup — it reads skills from `~/.claude/skills/` automatically, so if you installed gstack for Claude, OpenCode already has all 21 skills.
+**OpenCode** — skills go to `~/.agents/skills/`:
+
+```bash
+./setup --host opencode
+```
 
 Hook-based safety skills (careful, freeze, guard) use inline safety advisory prose on non-Claude hosts.
 

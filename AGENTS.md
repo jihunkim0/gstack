@@ -50,7 +50,7 @@ gstack skills work across multiple AI coding agents:
 | **Claude Code** | `~/.claude/skills/gstack/` | `./setup` (default) |
 | **Codex CLI** | `~/.codex/skills/` | `./setup --host codex` |
 | **Gemini CLI** | `~/.gemini/skills/` (symlinks) | `./setup --host gemini` |
-| **OpenCode** | `~/.claude/skills/` (shared) | No setup needed |
+| **OpenCode** | `~/.agents/skills/` (symlinks) | `./setup --host opencode` |
 | **Cursor** | `.agents/skills/` (workspace) | Copy to project |
 
 `./setup --host auto` detects all installed agents and configures each one.
@@ -58,8 +58,8 @@ gstack skills work across multiple AI coding agents:
 **Gemini CLI** uses `gemini skills link` to symlink each skill directory into
 `~/.gemini/skills/`. All 21 skills are linked automatically.
 
-**OpenCode** reads from `~/.claude/skills/` — the same directory Claude uses.
-If gstack is installed for Claude, OpenCode gets all skills for free.
+**OpenCode** reads from `~/.agents/skills/`. Run `./setup --host opencode` to
+symlink all 21 skill directories there.
 
 ## Key conventions
 
