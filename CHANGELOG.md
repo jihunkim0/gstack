@@ -17,6 +17,22 @@
 - **Skills help each other now.** `/plan-ceo-review` and `/plan-eng-review` detect when you'd benefit from running `/office-hours` first and offer it — one-tap to switch, one-tap to decline. If you seem lost during a CEO review, it'll gently suggest brainstorming first.
 - **Spec review metrics.** Every adversarial review logs iterations, issues found/fixed, and quality score to `~/.gstack/analytics/spec-review.jsonl`. Over time, you can see if your design docs are getting better.
 
+## [0.9.0.2] - 2026-03-20 — Multi-CLI runner + Gemini/OpenCode auto-setup
+
+**Run E2E evals on Gemini CLI and OpenCode, not just Claude.** The eval harness now supports a `--runner` flag so you can test your skills on any CLI.
+
+- **Gemini auto-linking in setup.** `./setup` now detects `gemini` and links all 21 skills via `gemini skills link`. Also works with `./setup --host gemini` or `./setup --host auto`. No more manual linking.
+- **OpenCode setup.** `./setup --host opencode` symlinks all 21 skills into `~/.agents/skills/`. Also works with `--host auto`.
+- **Multi-CLI E2E evals.** `bun run test:e2e:gemini` and `bun run test:e2e:opencode` run the same eval suite on different CLIs. Each CLI's NDJSON schema is normalized via adapters so tool calls, costs, and turn counts are comparable.
+- **CLI-agnostic progress display.** Real-time streaming works for Claude, Gemini, and OpenCode — tool names are extracted regardless of which CLI is running.
+- **Stdin pipe instead of shell spawn.** E2E runner now uses `Bun.spawn` with stdin pipe instead of `cat file | claude` shell commands. Eliminates shell escaping issues and injection risk.
+
+### For contributors
+
+- RunnerAdapter interface + 3 adapters (claude, gemini, opencode) with 43 unit tests
+- Tool name normalization map (e.g., Gemini's `run_shell_command` → `bash`)
+- `EVALS_RUNNER` env var selects CLI for evals (default: claude)
+
 ## [0.9.0.1] - 2026-03-19
 
 ### Changed
@@ -32,7 +48,7 @@
 **gstack now works on any AI agent that supports the open SKILL.md standard.** Install once, use from Claude Code, OpenAI Codex CLI, Google Gemini CLI, or Cursor. All 21 skills are available in `.agents/skills/` -- just run `./setup --host codex` or `./setup --host auto` and your agent discovers them automatically.
 
 - **One install, four agents.** Claude Code reads from `.claude/skills/`, everything else reads from `.agents/skills/`. Same skills, same prompts, adapted for each host. Hook-based safety skills (careful, freeze, guard) get inline safety advisory prose instead of hooks -- they work everywhere.
-- **Auto-detection.** `./setup --host auto` detects which agents you have installed and sets up both. Already have Claude Code? It still works exactly the same.
+- **Auto-detection.** `./setup --host auto` detects which agents you have installed (Claude, Codex, Gemini, OpenCode) and sets up each one. Already have Claude Code? It still works exactly the same.
 - **Codex-adapted output.** Frontmatter is stripped to just name + description (Codex doesn't need allowed-tools or hooks). Paths are rewritten from `~/.claude/` to `~/.codex/`. The `/codex` skill itself is excluded from Codex output -- it's a Claude wrapper around `codex exec`, which would be self-referential.
 - **CI checks both hosts.** The freshness check now validates Claude and Codex output independently. Stale Codex docs break the build just like stale Claude docs.
 

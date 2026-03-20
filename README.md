@@ -56,23 +56,30 @@ Open Claude Code and paste this. Claude does the rest.
 
 Real files get committed to your repo (not a submodule), so `git clone` just works. Everything lives inside `.claude/`. Nothing touches your PATH or runs in the background.
 
-### Codex, Gemini CLI, or Cursor
+### Codex, Gemini CLI, OpenCode, or Cursor
 
-gstack works on any agent that supports the [SKILL.md standard](https://github.com/anthropics/claude-code). Skills live in `.agents/skills/` and are discovered automatically.
+gstack works on any agent that supports the [SKILL.md standard](https://github.com/anthropics/claude-code). All 21 skills work across all supported agents.
 
-```bash
-git clone https://github.com/garrytan/gstack.git ~/.codex/skills/gstack
-cd ~/.codex/skills/gstack && ./setup --host codex
-```
-
-Or let setup auto-detect which agents you have installed:
+**Auto-detect** — installs for every agent you have:
 
 ```bash
 git clone https://github.com/garrytan/gstack.git ~/gstack
 cd ~/gstack && ./setup --host auto
 ```
 
-This installs to `~/.claude/skills/gstack` and/or `~/.codex/skills/gstack` depending on what's available. All 21 skills work across all supported agents. Hook-based safety skills (careful, freeze, guard) use inline safety advisory prose on non-Claude hosts.
+This detects `claude`, `codex`, `gemini`, and `opencode` binaries and sets up each one. Or install for a specific agent:
+
+```bash
+# Codex — skills go to ~/.codex/skills/
+./setup --host codex
+
+# Gemini CLI — links all 21 skills via `gemini skills link`
+./setup --host gemini
+```
+
+**OpenCode** works with zero setup — it reads skills from `~/.claude/skills/` automatically, so if you installed gstack for Claude, OpenCode already has all 21 skills.
+
+Hook-based safety skills (careful, freeze, guard) use inline safety advisory prose on non-Claude hosts.
 
 ## See it work
 
