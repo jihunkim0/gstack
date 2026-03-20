@@ -20,7 +20,12 @@ const ROOT = path.resolve(import.meta.dir, '..');
 // have invisible couplings — preamble text, SKILL.md content, and timing all affect
 // agent behavior. See CLAUDE.md "E2E eval failure blame protocol" for details.
 const evalsEnabled = !!process.env.EVALS;
+const evalsRunner = (process.env.EVALS_RUNNER || 'claude') as 'claude' | 'gemini' | 'opencode';
 const describeE2E = evalsEnabled ? describe : describe.skip;
+
+if (evalsEnabled && evalsRunner !== 'claude') {
+  process.stderr.write(`\nEVALS_RUNNER: ${evalsRunner}\n`);
+}
 
 // --- Diff-based test selection ---
 // When EVALS_ALL is not set, only run tests whose touchfiles were modified.

@@ -21,6 +21,8 @@
     "test:codex:all": "EVALS=1 EVALS_ALL=1 bun test test/codex-e2e.test.ts",
     "test:gemini": "EVALS=1 bun test test/gemini-e2e.test.ts",
     "test:gemini:all": "EVALS=1 EVALS_ALL=1 bun test test/gemini-e2e.test.ts",
+    "test:e2e:gemini": "EVALS=1 EVALS_RUNNER=gemini bun test test/skill-e2e.test.ts",
+    "test:e2e:opencode": "EVALS=1 EVALS_RUNNER=opencode bun test test/skill-e2e.test.ts",
     "skill:check": "bun run scripts/skill-check.ts",
     "dev:skill": "bun run scripts/dev-skill.ts",
     "start": "bun run browse/src/server.ts",

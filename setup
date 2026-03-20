@@ -214,7 +214,31 @@ if [ "$INSTALL_CODEX" -eq 1 ]; then
   create_agents_sidecar "$REPO_ROOT"
 fi
 
-# 7. First-time welcome + legacy cleanup
+# 7. Link all skills to Gemini CLI if available
+if command -v gemini >/dev/null 2>&1; then
+  gemini_existing=$(gemini skills list 2>/dev/null || true)
+  gemini_linked=()
+  for skill_dir in "$GSTACK_DIR"/*/; do
+    if [ -f "$skill_dir/SKILL.md" ]; then
+      skill_name="$(basename "$skill_dir")"
+      [ "$skill_name" = "node_modules" ] && continue
+      # Check if already linked
+      if echo "$gemini_existing" | grep -q "^${skill_name} "; then
+        gemini_linked+=("$skill_name")
+      else
+        if gemini skills link "$skill_dir" --consent >/dev/null 2>&1; then
+          gemini_linked+=("$skill_name")
+        fi
+      fi
+    fi
+  done
+  if [ ${#gemini_linked[@]} -gt 0 ]; then
+    echo "gstack ready (gemini)."
+    echo "  gemini skills (${#gemini_linked[@]}): ${gemini_linked[*]}"
+  fi
+fi
+
+# 8. First-time welcome + legacy cleanup
 if [ ! -d "$HOME/.gstack" ]; then
   mkdir -p "$HOME/.gstack"
   echo "  Welcome! Run /gstack-upgrade anytime to stay current."

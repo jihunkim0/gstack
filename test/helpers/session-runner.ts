@@ -1,14 +1,20 @@
 /**
- * Claude CLI subprocess runner for skill E2E testing.
+ * Multi-CLI subprocess runner for skill E2E testing.
  *
- * Spawns `claude -p` as a completely independent process (not via Agent SDK),
- * so it works inside Claude Code sessions. Pipes prompt via stdin, streams
- * NDJSON output for real-time progress, scans for browse errors.
+ * Spawns a CLI process (Claude, Gemini, or OpenCode) via RunnerAdapter,
+ * pipes prompt via stdin, streams NDJSON output for real-time progress,
+ * and scans for browse errors.
+ *
+ *   runSkillTest({ runner: 'claude' })  ──► ClaudeAdapter
+ *   runSkillTest({ runner: 'gemini' })  ──► GeminiAdapter
+ *   runSkillTest({ runner: 'opencode' }) ──► OpenCodeAdapter
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { getAdapter } from './runner-registry';
+import type { RunnerAdapter, ParsedNDJSON as AdapterParsedNDJSON } from './runner-adapter';
 
 const GSTACK_DEV_DIR = path.join(os.homedir(), '.gstack-dev');
 const HEARTBEAT_PATH = path.join(GSTACK_DEV_DIR, 'e2e-live.json');
@@ -41,6 +47,7 @@ export interface SkillTestResult {
   output: string;
   costEstimate: CostEstimate;
   transcript: any[];
+  runner: string;
 }
 
 const BROWSE_ERROR_PATTERNS = [
@@ -51,7 +58,7 @@ const BROWSE_ERROR_PATTERNS = [
   /no such file or directory.*browse/i,
 ];
 
-// --- Testable NDJSON parser ---
+// --- Legacy parseNDJSON export (Claude-only, for backward compat with existing tests) ---
 
 export interface ParsedNDJSON {
   transcript: any[];
@@ -62,9 +69,8 @@ export interface ParsedNDJSON {
 }
 
 /**
- * Parse an array of NDJSON lines into structured transcript data.
- * Pure function — no I/O, no side effects. Used by both the streaming
- * reader and unit tests.
+ * Parse Claude NDJSON lines. Kept for backward compatibility with
+ * session-runner.test.ts. New code should use adapter.parseNDJSON().
  */
 export function parseNDJSON(lines: string[]): ParsedNDJSON {
   const transcript: any[] = [];
@@ -79,7 +85,6 @@ export function parseNDJSON(lines: string[]): ParsedNDJSON {
       const event = JSON.parse(line);
       transcript.push(event);
 
-      // Track turns and tool calls from assistant events
       if (event.type === 'assistant') {
         turnCount++;
         const content = event.message?.content || [];
@@ -106,11 +111,37 @@ function truncate(s: string, max: number): string {
   return s.length > max ? s.slice(0, max) + '…' : s;
 }
 
+/**
+ * Extract tool name from a streaming NDJSON event (CLI-agnostic).
+ * Used for real-time progress display before full parseNDJSON runs.
+ */
+function extractToolFromEvent(event: any): { name: string; input: any } | null {
+  // Claude: type:"assistant" → message.content[].type:"tool_use"
+  if (event.type === 'assistant') {
+    const content = event.message?.content || [];
+    for (const item of content) {
+      if (item.type === 'tool_use') {
+        return { name: item.name || 'unknown', input: item.input || {} };
+      }
+    }
+  }
+  // Gemini: type:"tool_use" → tool_name
+  if (event.type === 'tool_use' && event.tool_name) {
+    return { name: event.tool_name, input: event.parameters || {} };
+  }
+  // OpenCode: type:"tool_use" → part.tool
+  if (event.type === 'tool_use' && event.part?.tool) {
+    return { name: event.part.tool, input: event.part.state?.input || {} };
+  }
+  return null;
+}
+
 // --- Main runner ---
 
 export async function runSkillTest(options: {
   prompt: string;
   workingDirectory: string;
+  runner?: 'claude' | 'gemini' | 'opencode';
   maxTurns?: number;
   allowedTools?: string[];
   timeout?: number;
@@ -120,6 +151,7 @@ export async function runSkillTest(options: {
   const {
     prompt,
     workingDirectory,
+    runner = 'claude',
     maxTurns = 15,
     allowedTools = ['Bash', 'Read', 'Write'],
     timeout = 120_000,
@@ -127,6 +159,7 @@ export async function runSkillTest(options: {
     runId,
   } = options;
 
+  const adapter = getAdapter(runner);
   const startTime = Date.now();
   const startedAt = new Date().toISOString();
 
@@ -140,26 +173,23 @@ export async function runSkillTest(options: {
     } catch { /* non-fatal */ }
   }
 
-  // Spawn claude -p with streaming NDJSON output. Prompt piped via stdin to
-  // avoid shell escaping issues. --verbose is required for stream-json mode.
-  const args = [
-    '-p',
-    '--output-format', 'stream-json',
-    '--verbose',
-    '--dangerously-skip-permissions',
-    '--max-turns', String(maxTurns),
-    '--allowed-tools', ...allowedTools,
+  // Build spawn command via adapter (array-based, no shell)
+  const spawnCmd = [
+    ...adapter.spawnCommand(),
+    ...adapter.spawnArgs({ maxTurns, allowedTools }),
   ];
 
-  // Write prompt to a temp file and pipe it via shell to avoid stdin buffering issues
-  const promptFile = path.join(workingDirectory, '.prompt-tmp');
-  fs.writeFileSync(promptFile, prompt);
-
-  const proc = Bun.spawn(['sh', '-c', `cat "${promptFile}" | claude ${args.map(a => `"${a}"`).join(' ')}`], {
+  // Spawn process with stdin pipe — prompt delivered via stdin
+  const proc = Bun.spawn(spawnCmd, {
     cwd: workingDirectory,
+    stdin: 'pipe',
     stdout: 'pipe',
     stderr: 'pipe',
   });
+
+  // Write prompt to stdin and close
+  proc.stdin.write(prompt);
+  proc.stdin.end();
 
   // Race against timeout
   let stderr = '';
@@ -192,46 +222,43 @@ export async function runSkillTest(options: {
         if (!line.trim()) continue;
         collectedLines.push(line);
 
-        // Real-time progress to stderr + persistent logs
+        // Real-time progress (CLI-agnostic tool extraction)
         try {
           const event = JSON.parse(line);
-          if (event.type === 'assistant') {
-            liveTurnCount++;
-            const content = event.message?.content || [];
-            for (const item of content) {
-              if (item.type === 'tool_use') {
-                liveToolCount++;
-                const elapsed = Math.round((Date.now() - startTime) / 1000);
-                const progressLine = `  [${elapsed}s] turn ${liveTurnCount} tool #${liveToolCount}: ${item.name}(${truncate(JSON.stringify(item.input || {}), 80)})\n`;
-                process.stderr.write(progressLine);
+          const tool = extractToolFromEvent(event);
+          if (tool) {
+            liveToolCount++;
+            if (event.type === 'assistant') liveTurnCount++;
+            const elapsed = Math.round((Date.now() - startTime) / 1000);
+            const progressLine = `  [${elapsed}s] ${runner} turn ${liveTurnCount} tool #${liveToolCount}: ${tool.name}(${truncate(JSON.stringify(tool.input), 80)})\n`;
+            process.stderr.write(progressLine);
 
-                // Persist progress.log
-                if (runDir) {
-                  try { fs.appendFileSync(path.join(runDir, 'progress.log'), progressLine); } catch { /* non-fatal */ }
-                }
+            // Persist progress.log
+            if (runDir) {
+              try { fs.appendFileSync(path.join(runDir, 'progress.log'), progressLine); } catch { /* non-fatal */ }
+            }
 
-                // Write heartbeat (atomic)
-                if (runId && testName) {
-                  try {
-                    const toolDesc = `${item.name}(${truncate(JSON.stringify(item.input || {}), 60)})`;
-                    atomicWriteSync(HEARTBEAT_PATH, JSON.stringify({
-                      runId,
-                      pid: proc.pid,
-                      startedAt,
-                      currentTest: testName,
-                      status: 'running',
-                      turn: liveTurnCount,
-                      toolCount: liveToolCount,
-                      lastTool: toolDesc,
-                      lastToolAt: new Date().toISOString(),
-                      elapsedSec: elapsed,
-                    }, null, 2) + '\n');
-                  } catch { /* non-fatal */ }
-                }
-              }
+            // Write heartbeat (atomic)
+            if (runId && testName) {
+              try {
+                const toolDesc = `${tool.name}(${truncate(JSON.stringify(tool.input), 60)})`;
+                atomicWriteSync(HEARTBEAT_PATH, JSON.stringify({
+                  runId,
+                  runner,
+                  pid: proc.pid,
+                  startedAt,
+                  currentTest: testName,
+                  status: 'running',
+                  turn: liveTurnCount,
+                  toolCount: liveToolCount,
+                  lastTool: toolDesc,
+                  lastToolAt: new Date().toISOString(),
+                  elapsedSec: elapsed,
+                }, null, 2) + '\n');
+              } catch { /* non-fatal */ }
             }
           }
-        } catch { /* skip — parseNDJSON will handle it later */ }
+        } catch { /* skip — adapter.parseNDJSON will handle it later */ }
 
         // Append raw NDJSON line to per-test transcript file
         if (runDir && safeName) {
@@ -250,8 +277,6 @@ export async function runSkillTest(options: {
   const exitCode = await proc.exited;
   clearTimeout(timeoutId);
 
-  try { fs.unlinkSync(promptFile); } catch { /* non-fatal */ }
-
   if (timedOut) {
     exitReason = 'timeout';
   } else if (exitCode === 0) {
@@ -262,9 +287,9 @@ export async function runSkillTest(options: {
 
   const duration = Date.now() - startTime;
 
-  // Parse all collected NDJSON lines
-  const parsed = parseNDJSON(collectedLines);
-  const { transcript, resultLine, toolCalls } = parsed;
+  // Parse all collected NDJSON lines via adapter
+  const parsed = adapter.parseNDJSON(collectedLines);
+  const { transcript, resultLine, toolCalls: adapterToolCalls } = parsed;
   const browseErrors: string[] = [];
 
   // Scan transcript + stderr for browse errors
@@ -276,19 +301,18 @@ export async function runSkillTest(options: {
     }
   }
 
-  // Use resultLine for structured result data
+  // Use normalized result for exit reason
   if (resultLine) {
-    if (resultLine.is_error) {
-      // claude -p can return subtype=success with is_error=true (e.g. API connection failure)
-      exitReason = 'error_api';
-    } else if (resultLine.subtype === 'success') {
+    if (resultLine.isError) {
+      exitReason = resultLine.status === 'error' ? 'error_api' : resultLine.status;
+    } else if (resultLine.status === 'success') {
       exitReason = 'success';
-    } else if (resultLine.subtype) {
-      exitReason = resultLine.subtype;
+    } else if (resultLine.status) {
+      exitReason = resultLine.status;
     }
   }
 
-  // Save failure transcript to persistent run directory (or fallback to workingDirectory)
+  // Save failure transcript
   if (browseErrors.length > 0 || exitReason !== 'success') {
     try {
       const failureDir = runDir || path.join(workingDirectory, '.gstack', 'test-transcripts');
@@ -301,34 +325,42 @@ export async function runSkillTest(options: {
         JSON.stringify({
           prompt: prompt.slice(0, 500),
           testName: testName || 'unknown',
+          runner,
           exitReason,
           browseErrors,
           duration,
           turnAtTimeout: timedOut ? liveTurnCount : undefined,
           lastToolCall: liveToolCount > 0 ? `tool #${liveToolCount}` : undefined,
           stderr: stderr.slice(0, 2000),
-          result: resultLine ? { type: resultLine.type, subtype: resultLine.subtype, result: resultLine.result?.slice?.(0, 500) } : null,
+          result: resultLine ? { status: resultLine.status, output: resultLine.output?.slice?.(0, 500) } : null,
         }, null, 2),
       );
     } catch { /* non-fatal */ }
   }
 
-  // Cost from result line (exact) or estimate from chars
-  const turnsUsed = resultLine?.num_turns || 0;
-  const estimatedCost = resultLine?.total_cost_usd || 0;
+  // Cost from adapter's normalized result
+  const turnsUsed = resultLine?.numTurns || 0;
+  const estimatedCost = resultLine?.totalCostUsd || 0;
   const inputChars = prompt.length;
-  const outputChars = (resultLine?.result || '').length;
-  const estimatedTokens = (resultLine?.usage?.input_tokens || 0)
-    + (resultLine?.usage?.output_tokens || 0)
-    + (resultLine?.usage?.cache_read_input_tokens || 0);
+  const outputChars = (resultLine?.output || '').length;
+  const estimatedTokens = resultLine
+    ? (resultLine.usage.inputTokens + resultLine.usage.outputTokens + resultLine.usage.cacheTokens)
+    : 0;
 
   const costEstimate: CostEstimate = {
     inputChars,
     outputChars,
     estimatedTokens,
-    estimatedCost: Math.round((estimatedCost) * 100) / 100,
+    estimatedCost: Math.round(estimatedCost * 100) / 100,
     turnsUsed,
   };
 
-  return { toolCalls, browseErrors, exitReason, duration, output: resultLine?.result || '', costEstimate, transcript };
+  // Map adapter toolCalls to legacy format (drop normalizedTool for compat)
+  const toolCalls = adapterToolCalls.map(tc => ({
+    tool: tc.tool,
+    input: tc.input,
+    output: tc.output,
+  }));
+
+  return { toolCalls, browseErrors, exitReason, duration, output: resultLine?.output || '', costEstimate, transcript, runner };
 }
